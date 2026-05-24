@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# =========================
+# Custom AI Models and IDE Logs
+# =========================
+models/
+*.gguf
+.vscode/
+*.jsonl
