@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""
+ilab_script.py
+Runs on the ilab machine.  Takes a SELECT SQL query as its first
+command-line argument (or reads it from stdin when no argument is given),
+executes it against the Rutgers postgres instance, and prints a formatted
+table to stdout.
+
+Usage (argument):
+    python3 ilab_script.py "SELECT * FROM loan_applications LIMIT 5;"
+
+Usage (stdin — for piping through SSH):
+    echo "SELECT COUNT(*) FROM loan_applications;" | python3 ilab_script.py
+"""
+
+import sys
+import os
+import psycopg2
+from psycopg2 import OperationalError
+
+# ── Database connection settings ────────────────────────────────────────────
+DB_HOST = "postgres.cs.rutgers.edu"
+DB_PORT = 5432
+DB_NAME = os.environ.get("PGDATABASE", "ehb63")   # netid as db name
+DB_USER = os.environ.get("PGUSER",     "ehb63")   # netid as username
+DB_PASS = os.environ.get("PGPASSWORD", "")        # set via env variable
+
+
+def get_connection():
+    return psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+    )
+
+
+def format_table(columns, rows):
+    """Return a plain-text, padded table string."""
+    col_widths = [len(str(c)) for c in columns]
+    for row in rows:
+        for i, val in enumerate(row):
+            col_widths[i] = max(col_widths[i], len(str(val) if val is not None else "NULL"))
+
+    sep = "+" + "+".join("-" * (w + 2) for w in col_widths) + "+"
+    header = "|" + "|".join(f" {str(c):<{w}} " for c, w in zip(columns, col_widths)) + "|"
+
+    lines = [sep, header, sep]
+    for row in rows:
+        line = "|" + "|".join(
+            f" {str(v) if v is not None else 'NULL':<{w}} "
+            for v, w in zip(row, col_widths)
+        ) + "|"
+        lines.append(line)
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def run_query(sql: str):
+    try:
+        conn = get_connection()
+    except OperationalError as exc:
+        print(f"[ERROR] Could not connect to database: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    sql = sql.strip()
+    if not sql:
+        print("[ERROR] Empty query.", file=sys.stderr)
+        sys.exit(1)
+
+    upper = sql.upper()
+    if not upper.startswith("SELECT") and not upper.startswith("WITH"):
+        print("[ERROR] Only SELECT queries are allowed.", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+                columns = [desc[0] for desc in cur.description]
+    except Exception as exc:
+        print(f"[ERROR] Query failed: {exc}", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+    finally:
+        conn.close()
+
+    if not rows:
+        print("(no rows returned)")
+        return
+
+    print(format_table(columns, rows))
+    print(f"\n({len(rows)} row{'s' if len(rows) != 1 else ''} returned)")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+    else:
+        query = sys.stdin.read()
+
+    run_query(query)
